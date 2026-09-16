@@ -1,0 +1,42 @@
+[project]
+name = "kleos"
+version = "0.1.0"
+description = "Watches official football YouTube channels and republishes new highlight uploads to Facebook, Instagram and X."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.28",
+    "yt-dlp>=2024.12.13",
+    "apscheduler>=3.10",
+    "defusedxml>=0.7",
+    "jinja2>=3.1",
+    "requests-oauthlib>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "respx>=0.22",
+    "ruff>=0.8",
+    "bandit>=1.8",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q --cov=kleos --cov-report=term-missing"
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# .agents is vendored tooling, not this project's source.
+extend-exclude = [".agents", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
