@@ -24,7 +24,7 @@ from kleos.publishers.base import Publisher
 from kleos.publishers.facebook import FacebookPublisher
 from kleos.publishers.instagram import InstagramPublisher
 from kleos.publishers.x import XPublisher
-from kleos.web import hooks, routes
+from kleos.web import api, hooks, routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,6 +77,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.publishers = publishers
     app.state.pipeline = pipeline
 
+    if settings.approval_required:
+        logger.info("Approval mode: clips wait for review in the Kleos app")
+    await pipeline.expire_pending()
     await scheduler.renew_subscriptions(settings)
     await scheduler.catch_up(settings, pipeline)
     running = scheduler.start_scheduler(settings, pipeline)
@@ -91,3 +94,4 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Kleos", lifespan=lifespan)
 app.include_router(hooks.router)
 app.include_router(routes.router)
+api.install(app)

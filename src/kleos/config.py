@@ -15,6 +15,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# Shorter tokens are refused outright: the API is reachable from the internet.
+MIN_API_TOKEN_LENGTH = 24
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -30,6 +33,12 @@ class Settings(BaseSettings):
     staleness_minutes: int = 180
     publish_enabled: bool = True
     caption_suffix: str = ""
+
+    # Approval gate. When on, clips are fetched and held until an operator
+    # approves them from the mobile app; nothing is published automatically.
+    approval_required: bool = True
+    pending_ttl_minutes: int = 720
+    kleos_api_token: str = ""
 
     data_dir: Path = PROJECT_ROOT / "data"
     work_dir: Path = PROJECT_ROOT / "work"
@@ -80,6 +89,8 @@ class Settings(BaseSettings):
             missing.append("FACEBOOK_PAGE_ID")
         if self.instagram_enabled and not self.instagram_user_id:
             missing.append("INSTAGRAM_USER_ID")
+        if self.approval_required and len(self.kleos_api_token) < MIN_API_TOKEN_LENGTH:
+            missing.append("KLEOS_API_TOKEN")
         if self.x_enabled:
             for name, value in (
                 ("X_API_KEY", self.x_api_key),

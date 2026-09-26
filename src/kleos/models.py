@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 
 
@@ -54,3 +55,28 @@ class PublishResult:
     @classmethod
     def failure(cls, platform: str, error: str) -> PublishResult:
         return cls(platform=platform, ok=False, error=error)
+
+
+class ClipStatus(StrEnum):
+    """Lifecycle of a clip held for approval. Only PENDING can change."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
+@dataclass(frozen=True, slots=True)
+class Clip:
+    """A fetched video waiting for, or past, an operator's decision."""
+
+    ref: VideoRef
+    path: Path
+    duration_s: float
+    status: ClipStatus
+    created_at: datetime
+    platforms: tuple[str, ...] = ()
+    decided_at: datetime | None = None
+
+    def to_local_video(self) -> LocalVideo:
+        return LocalVideo(ref=self.ref, path=self.path, duration_s=self.duration_s)

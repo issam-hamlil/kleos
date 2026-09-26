@@ -99,6 +99,31 @@ Set Windows to never sleep. If the machine is down when a highlight drops, the
 push is lost for good — the catch-up poller reconciles on startup and every 15
 minutes, but `STALENESS_MINUTES` stops it posting anything older than that.
 
+### 6. Approval mode and the mobile app
+
+By default (`APPROVAL_REQUIRED=true`) nothing is published automatically. Each
+new upload is fetched and held as a pending clip. The operator reviews it in the
+Kleos Android app (see `android/`), picks the platforms, and approves or rejects
+it. Clips not reviewed within `PENDING_TTL_MINUTES` are deleted unpublished.
+
+The app talks to `/api/*` with a bearer token. Set `KLEOS_API_TOKEN` to at least
+24 random characters; while it is unset the API refuses every request.
+
+If Cloudflare Access protects the tunnel, **exclude `/api`** from the policy as
+well as `/media` — the API authenticates on its own token, and the app cannot
+complete an Access browser login. Set `APPROVAL_REQUIRED=false` to restore fully
+automatic publishing.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/pending` | clips waiting for review |
+| `GET /api/clips/{id}/stream` | the clip, with Range support for seeking |
+| `POST /api/clips/{id}/approve` | `{"platforms": ["facebook", "x"]}` |
+| `POST /api/clips/{id}/reject` | drop without publishing |
+| `GET /api/platforms` | platforms that can be approved to right now |
+| `GET /api/analytics` | decision totals, approval rate, review time, per-platform outcomes |
+| `GET /api/history` | recent publications |
+
 ---
 
 ## Why this shape

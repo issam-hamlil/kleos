@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 RENEWAL_HOURS = 24
 CATCH_UP_MINUTES = 15
+EXPIRY_MINUTES = 10
 
 
 def callback_url(settings: Settings) -> str:
@@ -60,6 +61,14 @@ async def catch_up(settings: Settings, pipeline: Pipeline) -> None:
                 logger.exception("Catch-up failed for %s", ref.video_id)
 
 
+async def expire_pending(pipeline: Pipeline) -> None:
+    """Purge clips nobody reviewed in time. One failure must not kill the timer."""
+    try:
+        await pipeline.expire_pending()
+    except Exception:  # noqa: BLE001
+        logger.exception("Pending-clip expiry failed")
+
+
 def start_scheduler(settings: Settings, pipeline: Pipeline) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(
@@ -76,6 +85,15 @@ def start_scheduler(settings: Settings, pipeline: Pipeline) -> AsyncIOScheduler:
         minutes=CATCH_UP_MINUTES,
         args=[settings, pipeline],
         id="catch_up",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        expire_pending,
+        "interval",
+        minutes=EXPIRY_MINUTES,
+        args=[pipeline],
+        id="expire_pending",
         max_instances=1,
         coalesce=True,
     )

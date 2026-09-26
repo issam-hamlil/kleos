@@ -10,19 +10,32 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from kleos import db
+from kleos import clip_store, db
 from kleos.config import Settings
 from kleos.media import fetch, trim
 from kleos.media.registry import MediaRegistry
-from kleos.models import LocalVideo, PublishResult, VideoRef
+from kleos.models import Clip, ClipStatus, LocalVideo, PublishResult, VideoRef
 from kleos.publishers.base import Publisher
 
 logger = logging.getLogger(__name__)
 
 KILL_SWITCH_KEY = "publish_enabled"
+
+
+class ClipNotPendingError(Exception):
+    """The clip does not exist, or an operator already decided it."""
+
+
+class PublishingDisabledError(Exception):
+    """The kill switch is on, so approvals cannot publish."""
+
+
+class UnknownPlatformError(ValueError):
+    """An approval named a platform that does not exist or is switched off."""
 
 
 def build_caption(ref: VideoRef, suffix: str) -> str:
@@ -83,6 +96,10 @@ class Pipeline:
             logger.warning("Kill switch is on - not publishing %s", ref.video_id)
             return ()
 
+        if self._settings.approval_required:
+            await self._queue_for_approval(ref)
+            return ()
+
         try:
             video = await fetch.fetch(ref, self._settings.work_dir)
         except Exception as exc:  # noqa: BLE001 - a fetch failure is per-video, not fatal
@@ -101,6 +118,112 @@ class Pipeline:
             return await self._publish_all(ref, video, targets)
         finally:
             self._purge_work_files(ref.video_id)
+
+    async def _queue_for_approval(self, ref: VideoRef) -> None:
+        """Fetch once and hold the file until an operator decides.
+
+        A clip that already exists in any state is left alone: the hub resends
+        pushes and the catch-up poller revisits recent uploads, and neither may
+        resurrect a clip that was rejected or expired.
+        """
+        if clip_store.get(self._settings.db_path, ref.video_id) is not None:
+            return
+        try:
+            video = await fetch.fetch(ref, self._settings.work_dir)
+        except Exception:  # noqa: BLE001 - a fetch failure is per-video, not fatal
+            logger.exception("Fetch failed for %s", ref.video_id)
+            self._purge_work_files(ref.video_id)
+            return
+        clip_store.insert_pending(self._settings.db_path, video)
+        logger.info("Queued %s for approval: %s", ref.video_id, ref.title[:80])
+
+    def available_publishers(self) -> tuple[Publisher, ...]:
+        """Platforms an operator can approve a clip to right now."""
+        return tuple(publisher for publisher in self._publishers if publisher.enabled)
+
+    async def approve(self, video_id: str, platforms: Iterable[str]) -> tuple[PublishResult, ...]:
+        """Publish a pending clip to the chosen platforms.
+
+        Raises rather than returning an empty result, so the caller can tell
+        "nothing to do" apart from "you asked for something invalid".
+        """
+        requested = tuple(dict.fromkeys(platforms))
+        available = {publisher.name: publisher for publisher in self.available_publishers()}
+        if not requested:
+            raise UnknownPlatformError("select at least one platform")
+        unknown = [name for name in requested if name not in available]
+        if unknown:
+            raise UnknownPlatformError(f"unavailable platform(s): {', '.join(unknown)}")
+
+        async with self._locks[video_id]:
+            if not self.publish_enabled():
+                raise PublishingDisabledError("publishing is disabled by the kill switch")
+            clip = self._pending_clip(video_id)
+            if not clip_store.transition(
+                self._settings.db_path, video_id, ClipStatus.PENDING, ClipStatus.APPROVED, requested
+            ):
+                raise ClipNotPendingError(video_id)
+            try:
+                return await self._publish_approved(clip, requested, available)
+            finally:
+                self._purge_work_files(video_id)
+
+    async def _publish_approved(
+        self, clip: Clip, requested: tuple[str, ...], available: dict[str, Publisher]
+    ) -> tuple[PublishResult, ...]:
+        if not clip.path.exists():
+            results = tuple(
+                PublishResult.failure(name, "source file missing") for name in requested
+            )
+            self._record_all(clip.ref.video_id, results)
+            return results
+        targets = tuple(
+            available[name]
+            for name in requested
+            if not db.already_published(self._settings.db_path, clip.ref.video_id, name)
+        )
+        return await self._publish_all(clip.ref, clip.to_local_video(), targets)
+
+    async def reject(self, video_id: str) -> None:
+        """Drop a pending clip without publishing it anywhere."""
+        async with self._locks[video_id]:
+            self._pending_clip(video_id)
+            if not clip_store.transition(
+                self._settings.db_path, video_id, ClipStatus.PENDING, ClipStatus.REJECTED
+            ):
+                raise ClipNotPendingError(video_id)
+            self._purge_work_files(video_id)
+        logger.info("Rejected %s", video_id)
+
+    async def expire_pending(self, now: datetime | None = None) -> int:
+        """Delete clips nobody reviewed in time. Returns how many expired.
+
+        Pending clips hold full source files; without this the disk fills with
+        highlights nobody looked at.
+        """
+        moment = now or datetime.now(UTC)
+        cutoff = moment - timedelta(minutes=self._settings.pending_ttl_minutes)
+        expired = 0
+        for clip in clip_store.pending_created_before(self._settings.db_path, cutoff):
+            async with self._locks[clip.ref.video_id]:
+                if clip_store.transition(
+                    self._settings.db_path,
+                    clip.ref.video_id,
+                    ClipStatus.PENDING,
+                    ClipStatus.EXPIRED,
+                    now=moment,
+                ):
+                    self._purge_work_files(clip.ref.video_id)
+                    expired += 1
+        if expired:
+            logger.info("Expired %s unreviewed clip(s)", expired)
+        return expired
+
+    def _pending_clip(self, video_id: str) -> Clip:
+        clip = clip_store.get(self._settings.db_path, video_id)
+        if clip is None or clip.status is not ClipStatus.PENDING:
+            raise ClipNotPendingError(video_id)
+        return clip
 
     def _pending_targets(self, video_id: str) -> tuple[Publisher, ...]:
         return tuple(
