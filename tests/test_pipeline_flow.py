@@ -49,6 +49,8 @@ class RecordingPublisher:
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     built = Settings()  # type: ignore[call-arg]
+    # These tests cover auto-publish mode; approval mode has its own suite.
+    built.approval_required = False
     built.data_dir = tmp_path / "data"
     built.work_dir = tmp_path / "work"
     built.data_dir.mkdir(parents=True)
