@@ -39,6 +39,21 @@ CREATE TABLE IF NOT EXISTS flags (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS clips (
+    video_id      TEXT PRIMARY KEY,
+    channel_id    TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    published_at  TEXT NOT NULL,
+    path          TEXT NOT NULL,
+    duration_s    REAL NOT NULL,
+    status        TEXT NOT NULL,
+    platforms     TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    decided_at    TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_clips_status ON clips(status, created_at);
 """
 
 
@@ -129,3 +144,16 @@ def set_flag(db_path: Path, key: str, value: str) -> None:
             " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value),
         )
+
+
+def publication_counts(db_path: Path) -> dict[str, dict[str, int]]:
+    """Per-platform totals of successful and failed publish attempts."""
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT platform, SUM(ok) AS published, SUM(1 - ok) AS failed"
+            " FROM publications GROUP BY platform"
+        ).fetchall()
+    return {
+        row["platform"]: {"published": int(row["published"]), "failed": int(row["failed"])}
+        for row in rows
+    }

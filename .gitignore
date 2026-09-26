@@ -6,8 +6,8 @@ venv/
 *.db
 *.db-wal
 *.db-shm
-work/
-data/
+/work/
+/data/
 .pytest_cache/
 .coverage
 htmlcov/

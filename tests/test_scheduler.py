@@ -165,10 +165,22 @@ async def test_catch_up_continues_after_one_video_fails(settings: Settings):
     assert len(spy.handled) == 2
 
 
-async def test_scheduler_registers_both_jobs(settings: Settings):
+async def test_scheduler_registers_every_job(settings: Settings):
     spy = SpyPipeline(settings)
     running = scheduler.start_scheduler(settings, spy)
     try:
-        assert {job.id for job in running.get_jobs()} == {"renew_subscriptions", "catch_up"}
+        assert {job.id for job in running.get_jobs()} == {
+            "renew_subscriptions",
+            "catch_up",
+            "expire_pending",
+        }
     finally:
         running.shutdown(wait=False)
+
+
+async def test_expiry_job_survives_a_failure(settings: Settings):
+    class Exploding(SpyPipeline):
+        async def expire_pending(self, now=None):
+            raise RuntimeError("disk gone")
+
+    await scheduler.expire_pending(Exploding(settings))  # must not raise
